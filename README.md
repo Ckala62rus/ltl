@@ -1,158 +1,283 @@
-# Первое включение
+# Slot Booking API
 
-#### Windows
+## Описание
 
-Запустить `init.bat` ввести имя проекта, порт для XHPROF, порт для NGINX, порт для MYSQL.
+API для бронирования слотов с защитой от оверсела.
 
-#### Linux/MacOS
+**Как работает бронирование:**
+1. **Холд (held)** - создается временный холд на 5 минут, место НЕ занято
+2. **Подтверждение (confirmed)** - холд подтверждается, место ЗАНЯТО (remaining уменьшается)
+3. **Отмена (cancelled)** - холд отменяется, если был confirmed - место возвращается
 
-Запустить `init.sh` ввести имя проекта, порт для XHPROF, порт для NGINX, порт для MYSQL.
+## Разворачивание проекта
 
-#### Общее
+1. Скачать проект
 
-Если конфликтов портов не предвидится:
-
-- XHPROF - любой, я ставлю 49999
-
-- NGINX - 80
-
-- MYSQL - 3306
-
-Комманда сгенерирует `docker-compose.yml` который нужно будет запустить.
-
-Билдим контейнер `docker-compose build`
-
-Запускаем контейнер в фоне `docker-compose up -d`
-
-# Логи
-
-### PHP
-
-Пробрасываются и пишутся логи (`./docker/php/logs/:/var/log/php/`):
-
-- **php** (`php.ini`)
-```ini
-error_log=/var/log/php/php.log
-```
-- **xdebug** (`php.ini`)
-```ini
-xdebug.log=/var/log/php/xdebug.log
-```
-- **xhprof** (непосредственно в коде. раздел **XHPROF**)
-```php
-$filename = "/var/log/php/$run.$type.xhprof";
+```bash
+git clone <repository-url>
+cd ltl
 ```
 
-# XHPROF
+2. Выполнить команду docker compose build --no-cache
 
-Установка в 2 шага:
-
-- `dockerfile` - XHProf
-- `docker-compose` - XHProfUI
-
-### Описание `dockerfile`
-
-```dockerfile
-RUN set -ex && apk add --no-cache --virtual .xhprof-deps $PHPIZE_DEPS
-RUN pecl update-channels && pecl install xhprof
-RUN docker-php-ext-enable xhprof
-RUN apk del .xhprof-deps
+```bash
+docker compose build --no-cache
 ```
 
-Если, происходит ошибка, типа - 
+3. Запустить проект docker compose up -d
 
-![](./docs/errors/pecl_error.jpg)
-
-изменить `Dockerfile` c:
-
-```dockerfile
-RUN pecl update-channels && pecl install xhprof
+```bash
+docker compose up -d
 ```
 
-на:
+4. Зайти в проект docker exec -it backend-dedov bash
 
-```dockerfile
-RUN curl "http://pecl.php.net/get/xhprof-2.3.5.tgz" -fsL -o ./xhprof-2.3.5.tgz && \
-    mkdir /var/xhprof && tar xf ./xhprof-2.3.5.tgz -C /var/xhprof && \
-    cd /var/xhprof/xhprof-2.3.5/extension && \
-    phpize && \
-    ./configure && \
-    make && \
-    make install
+```bash
+docker exec -it backend-dedov bash
 ```
 
-### Описание `docker-compose.yaml`
+5. Выполнить composer install
 
-```yaml
-xhprof:
-    image: tuimedia/xhprof-docker:0.9.4
-    volumes:
-      - ./backend/logs/php/:/profiles/
-    ports:
-      - "49998:80"
+```bash
+composer install
 ```
 
-### Использование
+6. Выполнить миграции - php artisan migrate
 
-```php
-define("XHPROF_DEBUG", extension_loaded("xhprof"));
-define("XHPROF_TYPE", "projectName");
+```bash
+php artisan migrate
+```
 
-if (XHPROF_DEBUG) {
-    xhprof_enable(XHPROF_FLAGS_CPU + XHPROF_FLAGS_MEMORY);
-    register_shutdown_function(function () {
-        $run = time();
-        $type = XHPROF_TYPE;
-        $filename = "/var/log/php/$run.$type.xhprof";
-        file_put_contents($filename, serialize(xhprof_disable()));
-    });
+7. Выполнить сиды - php artisan db:seed --class=SlotSeeder
+
+```bash
+php artisan db:seed --class=SlotSeeder
+```
+
+После выполнения всех шагов API будет доступно по адресу `http://localhost:85/api/`
+
+## API Endpoints
+
+### 1. Получение доступных слотов
+
+```bash
+curl -X GET http://localhost:85/api/slots/availability
+```
+
+**Ответ:**
+```json
+{
+  "status": true,
+  "message": "Available slots retrieved successfully",
+  "data": {
+    "slots": [
+      {
+        "slot_id": 1,
+        "capacity": 10,
+        "remaining": 10
+      },
+      {
+        "slot_id": 2,
+        "capacity": 5,
+        "remaining": 5
+      }
+    ]
+  }
 }
 ```
 
-### Анализ
+### 2. Создание холда
 
-[XHProfUI](http://localhost:49998/)
+```bash
+# С генерацией UUID (Linux/Mac)
+curl -X POST http://localhost:85/api/slots/1/hold \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H "Content-Type: application/json"
 
-# XDEBUG
+# С генерацией UUID (Windows PowerShell)
+$guid = [guid]::NewGuid().ToString()
+Invoke-RestMethod -Method Post `
+  -Uri "http://localhost:85/api/slots/1/hold" `
+  -Headers @{"Idempotency-Key"=$guid; "Content-Type"="application/json"}
 
-### Описание `dockerfile`:
-
-```dockerfile
-RUN set -ex && apk add --no-cache --virtual .xdebug-deps $PHPIZE_DEPS
-RUN pecl update-channels && pecl install xdebug
-RUN docker-php-ext-enable xdebug
-RUN apk del .xdebug-deps
+# С фиксированным UUID
+curl -X POST http://localhost:85/api/slots/1/hold \
+  -H "Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "Content-Type: application/json"
 ```
 
-Если, происходит ошибка, типа -
-
-![](./docs/errors/pecl_error.jpg)
-
-изменить `Dockerfile` c:
-
-```dockerfile
-RUN pecl update-channels && pecl install xdebug
+**Ответ при успехе (201 Created):**
+```json
+{
+  "status": true,
+  "message": "Hold created successfully",
+  "data": {
+    "hold": {
+      "success": true,
+      "idempotent": false,
+      "hold_id": 1,
+      "slot_id": 1,
+      "status": "held",
+      "expires_at": "2024-12-01 12:05:00",
+      "message": "Hold created successfully"
+    }
+  }
+}
 ```
 
-на:
-
-```dockerfile
-RUN curl "http://pecl.php.net/get/xdebug-3.1.3.tgz" -fsL -o ./xdebug-3.1.3.tgz && \
-    mkdir /var/xdebug && tar xf ./xdebug-3.1.3.tgz -C /var/xdebug && \
-    cd /var/xdebug/xdebug-3.1.3 && \
-    phpize && \
-    ./configure && \
-    make && \
-    make install
+**Конфликт - нет мест (409 Conflict):**
+```json
+{
+  "status": false,
+  "message": "No available capacity",
+  "data": {
+    "hold": null
+  }
+}
 ```
 
-Настройки:
+### 3. Подтверждение холда
 
-- [PHP Web Page](./docs/XDEBUG-php-web-page.md)
-  
-- [Debug Connections](./docs/XDEBUG-php-debug-connections.md)
+```bash
+curl -X POST http://localhost:85/api/holds/1/confirm \
+  -H "Content-Type: application/json"
+```
 
+**Ответ при успехе (200 OK):**
+```json
+{
+  "status": true,
+  "message": "Hold confirmed successfully",
+  "data": {
+    "hold": {
+      "success": true,
+      "message": "Hold confirmed successfully",
+      "hold_id": 1,
+      "slot_id": 1
+    }
+  }
+}
+```
 
+**Конфликт - нет мест (409 Conflict):**
+```json
+{
+  "status": false,
+  "message": "No available capacity (oversell protection)",
+  "data": {
+    "hold": null
+  }
+}
+```
 
+**Истек срок (410 Gone):**
+```json
+{
+  "status": false,
+  "message": "Hold expired",
+  "data": {
+    "hold": null
+  }
+}
+```
 
+### 4. Отмена холда
 
+```bash
+curl -X DELETE http://localhost:85/api/holds/1 \
+  -H "Content-Type: application/json"
+```
+
+**Ответ при успехе (200 OK):**
+```json
+{
+  "status": true,
+  "message": "Hold cancelled successfully",
+  "data": {
+    "hold": {
+      "success": true,
+      "message": "Hold cancelled successfully",
+      "hold_id": 1
+    }
+  }
+}
+```
+
+## Примеры использования
+
+### Генерация UUID для Idempotency-Key
+
+```bash
+# Linux/Mac
+uuidgen
+
+# Windows PowerShell
+[guid]::NewGuid().ToString()
+
+# Node.js
+node -e "console.log(require('crypto').randomUUID())"
+
+# Python
+python -c "import uuid; print(uuid.uuid4())"
+
+# Online
+# https://www.uuidgenerator.net/
+```
+
+### Комплексный сценарий бронирования
+
+```bash
+# Шаг 1: Проверяем доступность
+curl -X GET http://localhost:85/api/slots/availability
+
+# Шаг 2: Создаем холд для слота 1
+UUID=$(uuidgen)  # или используйте фиксированный UUID
+curl -X POST http://localhost:85/api/slots/1/hold \
+  -H "Idempotency-Key: $UUID" \
+  -H "Content-Type: application/json"
+
+# Шаг 3: Подтверждаем холд
+curl -X POST http://localhost:85/api/holds/1/confirm \
+  -H "Content-Type: application/json"
+
+# Шаг 4: Проверяем доступность (остаток уменьшился)
+curl -X GET http://localhost:85/api/slots/availability
+
+# Шаг 5: Отменяем холд
+curl -X DELETE http://localhost:85/api/holds/1 \
+  -H "Content-Type: application/json"
+
+# Шаг 6: Проверяем доступность (остаток вернулся)
+curl -X GET http://localhost:85/api/slots/availability
+```
+
+## Структура базы данных
+
+### Таблица `slots`
+
+| Поле      | Тип    | Описание                |
+|-----------|--------|-------------------------|
+| id        | INT    | Primary Key             |
+| name      | STRING | Название слота          |
+| capacity  | INT    | Вместимость слота       |
+| remaining | INT    | Остаток свободных мест  |
+| timestamps| TIMESTAMP | created_at, updated_at |
+
+### Таблица `holds`
+
+| Поле            | Тип       | Описание                        |
+|-----------------|-----------|---------------------------------|
+| id              | INT       | Primary Key                     |
+| slot_id         | INT       | Foreign Key -> slots.id         |
+| status          | STRING    | held/confirmed/cancelled        |
+| idempotency_key | STRING    | Уникальный ключ идемпотентности |
+| expires_at      | TIMESTAMP | Время истечения холда           |
+| timestamps      | TIMESTAMP | created_at, updated_at          |
+
+## Важные замечания
+
+- **Создание холда (held) НЕ уменьшает remaining** - место будет занято только после подтверждения
+- **Подтверждение холда (confirmed) УМЕНЬШАЕТ remaining** - это единственный момент, когда место становится занятым
+- **Отмена confirmed холда ВОЗВРАЩАЕТ remaining** - место освобождается обратно
+- **Idempotency-Key обязателен** для создания холда и должен быть валидным UUID
+- **Холд истекает через 5 минут** - после истечения его нельзя подтвердить

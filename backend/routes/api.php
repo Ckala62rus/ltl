@@ -1,6 +1,8 @@
 <?php
 
 use App\Http\Controllers\AuthTokenController;
+use App\Http\Controllers\AvailabilityController;
+use App\Http\Controllers\HoldController;
 use App\Http\Controllers\UserController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -28,4 +30,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('logout', [AuthTokenController::class, 'logout']);
 });
 
-//Route::any('bot', [UserController::class, 'test_webhook']);
+// Slots API
+Route::prefix('slots')->group(function () {
+    Route::get('/availability', [AvailabilityController::class, 'availability']);
+    Route::post('/{id}/hold', [HoldController::class, 'createHold']);
+});
+
+// Holds Management API
+Route::prefix('holds')->group(function () {
+    Route::post('/{id}/confirm', [HoldController::class, 'confirm']);
+    Route::delete('/{id}', [HoldController::class, 'cancel']);
+});
